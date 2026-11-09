@@ -364,7 +364,9 @@ final class LibraryTests: XCTestCase {
         elif a[0] == 'xcodebuild':
             if 'PRODUCT_BUNDLE_IDENTIFIER=' not in ' '.join(a):
                 # App IDs are global: the plain one is registered to another team, and the app retries under a team variant
+                # as Xcode does, the profile errors of the wildcard fallback follow the taken-ID one
                 print('error: "iOS Team Provisioning Profile" cannot be registered to your development team', flush=True)
+                print('error: Provisioning profile "iOS Team Provisioning Profile: *" doesn\\'t include the Increased Memory Limit capability.', flush=True)
                 sys.exit(1)
             app = pathlib.Path(a[a.index('-derivedDataPath') + 1]) / 'Build/Products/Release-iphoneos/DmIOS.app'
             app.mkdir(parents=True, exist_ok=True)   # a re-sign rebuilds over the app the install left there

@@ -1721,11 +1721,13 @@ final class BuildModel: ObservableObject {
                 }
                 let appID = "org.nxnative." + (Self.titleID(self.basePath).map { String(format: "%016llX", $0) } ?? "game").lowercased()
                 let teamVariant = "org.nxnative." + appID.split(separator: ".").last!.appending(".\(team)")
+                // Xcode follows the taken App ID with the wildcard profile's missing-entitlement errors, so the
+                // taken-ID line is pinned: the last error line alone would hide it and skip the retry.
                 func taken(_ e: String?) -> Bool {
                     guard let e else { return false }
                     return e.contains("cannot be registered to your development team") || e.contains("No profiles for 'org.nxnative.")
                 }
-                self.runTool(id: 1001, name: String(format: self.t("dev.signStage"), name), sign(), step: Self.xcodeStep) { firstError in
+                self.runTool(id: 1001, name: String(format: self.t("dev.signStage"), name), sign(), step: Self.xcodeStep, pin: taken) { firstError in
                     if let firstError, taken(firstError) {
                         // Once more under this team's own identifier, and the log says why the first try failed.
                         fputs("signing: " + appID + " is registered to another team; retrying as " + teamVariant + "\n", stderr)
@@ -1942,9 +1944,10 @@ final class BuildModel: ObservableObject {
     }
 
     /// One of Xcode's tools as a stage of the build: in its own process group (Stop ends it), its output in the log,
-    /// its progress in the stage. `then` gets nil on success, else the last error line.
+    /// its progress in the stage. `then` gets nil on success, else the last error line — or the first one `pin`
+    /// matches: xcodebuild prints a cause first and the errors that follow from it after.
     private func runTool(id: Int, name: String, _ command: [String], step: @escaping (String) -> (detail: String, percent: Double?)?,
-                         then: @escaping (String?) -> Void) {
+                         pin: @escaping (String) -> Bool = { _ in false }, then: @escaping (String?) -> Void) {
         // A stage that runs again (the team-variant signing retry uses the same id) keeps its row:
         // a second row with that id would never see an update again — every lookup takes the first
         // match — and would spin for ever after the build moved on.
@@ -1960,7 +1963,7 @@ final class BuildModel: ObservableObject {
         p.environment = ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "HOME": NSHomeDirectory(), "USER": NSUserName(), "LANG": "en_US.UTF-8"]
         Self.inOwnGroup(p, python: pythonPath.isEmpty ? "/usr/bin/python3" : pythonPath)
         let pipe = Pipe(); p.standardOutput = pipe; p.standardError = pipe
-        var buffer = "", lastError = ""
+        var buffer = "", lastError = "", pinned = false
         pipe.fileHandleForReading.readabilityHandler = { [weak self] h in
             let d = h.availableData
             guard !d.isEmpty, let chunk = String(data: d, encoding: .utf8) else { return }
@@ -1970,7 +1973,9 @@ final class BuildModel: ObservableObject {
                 while let nl = buffer.firstIndex(of: "\n") {
                     let line = String(buffer[..<nl]); buffer = String(buffer[buffer.index(after: nl)...])
                     self.append(line + "\n")
-                    if line.contains("error:") || line.hasPrefix("ERROR:") { lastError = line.trimmingCharacters(in: .whitespaces) }
+                    if !pinned, line.contains("error:") || line.hasPrefix("ERROR:") {
+                        lastError = line.trimmingCharacters(in: .whitespaces); pinned = pin(line)
+                    }
                     if let s = step(line), let i = self.stages.firstIndex(where: { $0.id == id }) {
                         self.stages[i].detail = s.detail
                         if let percent = s.percent { self.stages[i].percent = percent }
